@@ -1,0 +1,1 @@
+nuitka --windows-disable-console --standalone --follow-imports --include-package="_cffi_backend" --include-data-dir="./sounds=./sounds" --nofollow-import-to="multiprocessing" --onefile dataset_edit.py

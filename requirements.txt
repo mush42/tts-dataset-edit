@@ -1,0 +1,2 @@
+miniaudio==1.59
+wxPython==4.2.1
