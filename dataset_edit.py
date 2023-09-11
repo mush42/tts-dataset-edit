@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import miniaudio
+import regex
 import wx
 import wx.lib.sized_controls as sc
 
@@ -25,6 +26,7 @@ DEFAULT_TITLE = "TTS Dataset Editor"
 EDITED_METADATA_FILENAME = "metadata.edited.json"
 SAVE_SOUND = os.fspath(Path.cwd().joinpath("sounds", "save.wav"))
 ALERT_SOUND = os.fspath(Path.cwd().joinpath("sounds", "alert.wav"))
+NAV_SOUND = os.fspath(Path.cwd().joinpath("sounds", "nav.wav"))
 
 @dataclass
 class WavAndTranscript:
@@ -67,9 +69,27 @@ class WavAndTranscript:
             return wavfile.getnframes() / wavfile.getframerate()
 
 
+class SearchWindow(SimpleDialog):
+    
+    def addControls(self, parent):
+        parent.SetSizerType("vertical")
+        wx.StaticText(parent, -1, "Filter by:")
+        self.textCtrl = wx.TextCtrl(parent, -1, style=wx.TE_RICH2)
+        self.regexCheckbox = wx.CheckBox(parent, -1, "Regular expression")
+
+    @classmethod
+    def ShowModal(cls, parent):
+        dlg = cls(parent=parent, title="Search")
+        ret = wx.Dialog.ShowModal(dlg)
+        if ret == wx.ID_CANCEL:
+            return "", False
+        return dlg.textCtrl.GetValue(), dlg.regexCheckbox.GetValue()
+
+
 class MainWindow(SimpleDialog):
     def __init__(self):
         self._volume = 75
+        self._autoplay_audio = False
         super().__init__(parent=None, title=DEFAULT_TITLE)
         self.SetSize(1000, 750)
         self.CenterOnScreen()
@@ -84,6 +104,7 @@ class MainWindow(SimpleDialog):
         parent.SetSizerType("vertical")
         filterBox = make_sized_static_box(parent, "Filters")
         filterBox.SetSizerType("horizontal")
+        self.searchBtn = wx.ToggleButton(filterBox, wx.ID_FIND, "Search")
         self.pendingReviewBtn = wx.ToggleButton(filterBox, -1, "Pending review")
         self.deletedBtn = wx.ToggleButton(filterBox, -1, "Deleted")
         wx.StaticText(parent, -1, "&Wavs")
@@ -104,6 +125,8 @@ class MainWindow(SimpleDialog):
         optionsBox = make_sized_static_box(parent, "Options")
         wx.StaticText(optionsBox, -1, "&Volume")
         volumeSlider = wx.Slider(optionsBox, -1, self._volume, 0, 100)
+        autoplayCheckbox = wx.CheckBox(optionsBox, -1, "Auto play audio when navigating")
+        autoplayCheckbox.SetValue(self._autoplay_audio)
         rtlCheckbox = wx.CheckBox(optionsBox, -1, "Right to left")
         buttonPanel = sc.SizedPanel(parent, -1)
         buttonPanel.SetSizerType("horizontal")
@@ -111,6 +134,7 @@ class MainWindow(SimpleDialog):
         self.saveBtn = wx.Button(buttonPanel, wx.ID_SAVE, "&Save")
         self.exportCSVBtn = wx.Button(buttonPanel, wx.ID_SAVEAS, "&Export to CSV")
         self.closeDatasetBtn = wx.Button(buttonPanel, wx.ID_FILE1, "&Close dataset")
+        self.Bind(wx.EVT_TOGGLEBUTTON, self.onFilterSearch, id=wx.ID_FIND)
         self.Bind(wx.EVT_TOGGLEBUTTON, self.onFilterPendingReview, self.pendingReviewBtn)
         self.Bind(wx.EVT_TOGGLEBUTTON, self.onFilterDeleted, self.deletedBtn)
         self.Bind(wx.EVT_BUTTON, self.onOpen, self.openBtn)
@@ -132,6 +156,12 @@ class MainWindow(SimpleDialog):
             lambda e: self.set_text_direction(e.IsChecked()),
             rtlCheckbox,
         )
+        autoplayCheckbox.Bind(
+            wx.EVT_CHECKBOX,
+            lambda e: setattr(self, "_autoplay_audio", e.IsChecked()),
+            autoplayCheckbox,
+        )
+        self.searchBtn.Enable(False)
         self.pendingReviewBtn.Enable(False)
         self.deletedBtn.Enable(False)
         self.saveBtn.Enable(False)
@@ -144,6 +174,7 @@ class MainWindow(SimpleDialog):
     def _set_accelerators(self):
         accelerator_map = {
             "F1": wx.ID_HELP,
+            "Ctrl+g": wx.ID_FIND,
             "Ctrl+o": wx.ID_OPEN,
             "Ctrl+s": wx.ID_APPLY,
             "Ctrl+w": wx.ID_FILE1,
@@ -159,6 +190,7 @@ class MainWindow(SimpleDialog):
             entries.append(accel)
         self.SetAcceleratorTable(wx.AcceleratorTable(entries))
         # Bind custom IDs
+        self.Bind(wx.EVT_MENU, self.onFilterSearch, id=wx.ID_FIND)
         self.Bind(wx.EVT_MENU, self.onHelp, id=wx.ID_HELP)
         self.Bind(wx.EVT_MENU, self.onNextItem, id=wx.ID_FORWARD)
         self.Bind(wx.EVT_MENU, self.onPrevItem, id=wx.ID_BACKWARD)
@@ -251,6 +283,7 @@ class MainWindow(SimpleDialog):
         else:
             self.wavList.set_focused_item(idx_to_select)
         self.openBtn.Enable(False)
+        self.searchBtn.Enable(True)
         self.pendingReviewBtn.Enable(True)
         self.deletedBtn.Enable(True)
         self.saveBtn.Enable(True)
@@ -302,6 +335,7 @@ class MainWindow(SimpleDialog):
                 self.save(True)
         self.transcriptTextCtrl.SetValue("")
         self.openBtn.Enable(True)
+        self.searchBtn.Enable(False)
         self.pendingReviewBtn.Enable(False)
         self.deletedBtn.Enable(False)
         self.saveBtn.Enable(False)
@@ -348,7 +382,10 @@ class MainWindow(SimpleDialog):
         if next_item_idx == wx.NOT_FOUND:
             return wx.Bell()
         self.wavList.set_focused_item(next_item_idx, sel_only=True)
-        self.onPlayPauseWav(None)
+        if self._autoplay_audio:
+            self.onPlayPauseWav(None)
+        else:
+            self.play_file(NAV_SOUND)
 
     def onPrevItem(self, event):
         selected_idx = self.wavList.GetFocusedItem()
@@ -360,7 +397,10 @@ class MainWindow(SimpleDialog):
         if prev_item_idx == wx.NOT_FOUND:
             return wx.Bell()
         self.wavList.set_focused_item(prev_item_idx, sel_only=True)
-        self.onPlayPauseWav(None)
+        if self._autoplay_audio:
+            self.onPlayPauseWav(None)
+        else:
+            self.play_file(NAV_SOUND)
 
     def onVolumeSlider(self, event):
         self._volume = event.GetInt()
@@ -385,7 +425,44 @@ class MainWindow(SimpleDialog):
             self.set_title(dirty=True)
         return wx.Bell()
 
+    def onFilterSearch(self, event):
+        if self.deletedBtn.GetValue():
+            self.deletedBtn.SetValue(False)
+        if self.pendingReviewBtn.GetValue():
+            self.pendingReviewBtn.SetValue(False)
+        if self.searchBtn.GetValue():
+            search_string, is_regex = SearchWindow.ShowModal(parent=self)
+            if not search_string:
+                self.searchBtn.SetValue(False)
+                wx.Bell()
+                return
+            if is_regex:
+                try:
+                    reg = regex.compile(search_string, regex.U)
+                except:
+                    self.searchBtn.SetValue(False)
+                    wx.MessageBox("Invalid regex", "Error", style=wx.ICON_ERROR)
+                    return
+                objs = list(filter(
+                    lambda o: reg.match(o.transcript),
+                    self.wavList._objects
+                ))
+            else:
+                objs = list(filter(
+                    lambda o: search_string in o.transcript,
+                    self.wavList._objects
+                ))
+            if objs:
+                self.wavList.set_objects(objs)
+            else:
+                wx.MessageBox("No matches found.", "No matches", style=wx.ICON_WARNING)
+                self.searchBtn.SetValue(False)
+        else:
+            self.wavList.set_objects(self._objects)
+
     def onFilterPendingReview(self, event):
+        if self.searchBtn.GetValue():
+            self.searchBtn.SetValue(False)
         if self.deletedBtn.GetValue():
             self.deletedBtn.SetValue(False)
         if self.pendingReviewBtn.GetValue():
@@ -399,6 +476,8 @@ class MainWindow(SimpleDialog):
         self.wavList.set_objects(objs, set_focus=True)
 
     def onFilterDeleted(self, event):
+        if self.searchBtn.GetValue():
+            self.searchBtn.SetValue(False)
         if self.pendingReviewBtn.GetValue():
             self.pendingReviewBtn.SetValue(False)
         if self.deletedBtn.GetValue():
@@ -456,7 +535,7 @@ class MainWindow(SimpleDialog):
                 return False
         entries = [
             obj.asdict()
-            for obj in self.wavList._objects
+            for obj in self._objects
         ]
         entries.sort(key=operator.itemgetter("idx"))
         with open(edited_metadata, "w", encoding="utf-8") as json_file:
