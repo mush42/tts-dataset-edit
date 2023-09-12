@@ -16,7 +16,6 @@ import wx
 import wx.lib.mixins.listctrl as listmix
 import wx.lib.sized_controls as sc
 
-
 THREADED_WORKER = ThreadPoolExecutor()
 ID_SKIP = 32000
 

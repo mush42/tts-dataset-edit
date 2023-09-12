@@ -15,18 +15,15 @@ import regex
 import wx
 import wx.lib.sized_controls as sc
 
-from gui_components import (
-    ColumnDefn,
-    ImmutableObjectListView,
-    SimpleDialog,
-    make_sized_static_box,
-)
+from gui_components import (ColumnDefn, ImmutableObjectListView, SimpleDialog,
+                            make_sized_static_box)
 
 DEFAULT_TITLE = "TTS Dataset Editor"
 EDITED_METADATA_FILENAME = "metadata.edited.json"
 SAVE_SOUND = os.fspath(Path.cwd().joinpath("sounds", "save.wav"))
 ALERT_SOUND = os.fspath(Path.cwd().joinpath("sounds", "alert.wav"))
 NAV_SOUND = os.fspath(Path.cwd().joinpath("sounds", "nav.wav"))
+
 
 @dataclass
 class WavAndTranscript:
@@ -70,7 +67,6 @@ class WavAndTranscript:
 
 
 class SearchWindow(SimpleDialog):
-    
     def addControls(self, parent):
         parent.SetSizerType("vertical")
         wx.StaticText(parent, -1, "Filter by:")
@@ -125,7 +121,9 @@ class MainWindow(SimpleDialog):
         optionsBox = make_sized_static_box(parent, "Options")
         wx.StaticText(optionsBox, -1, "&Volume")
         volumeSlider = wx.Slider(optionsBox, -1, self._volume, 0, 100)
-        autoplayCheckbox = wx.CheckBox(optionsBox, -1, "Auto play audio when navigating")
+        autoplayCheckbox = wx.CheckBox(
+            optionsBox, -1, "Auto play audio when navigating"
+        )
         autoplayCheckbox.SetValue(self._autoplay_audio)
         rtlCheckbox = wx.CheckBox(optionsBox, -1, "Right to left")
         buttonPanel = sc.SizedPanel(parent, -1)
@@ -135,7 +133,9 @@ class MainWindow(SimpleDialog):
         self.exportCSVBtn = wx.Button(buttonPanel, wx.ID_SAVEAS, "&Export to CSV")
         self.closeDatasetBtn = wx.Button(buttonPanel, wx.ID_FILE1, "&Close dataset")
         self.Bind(wx.EVT_TOGGLEBUTTON, self.onFilterSearch, id=wx.ID_FIND)
-        self.Bind(wx.EVT_TOGGLEBUTTON, self.onFilterPendingReview, self.pendingReviewBtn)
+        self.Bind(
+            wx.EVT_TOGGLEBUTTON, self.onFilterPendingReview, self.pendingReviewBtn
+        )
         self.Bind(wx.EVT_TOGGLEBUTTON, self.onFilterDeleted, self.deletedBtn)
         self.Bind(wx.EVT_BUTTON, self.onOpen, self.openBtn)
         self.Bind(wx.EVT_BUTTON, self.onSave, self.saveBtn)
@@ -294,17 +294,21 @@ class MainWindow(SimpleDialog):
     def onSave(self, event):
         if self.save():
             wx.MessageBox(
-                f"Edits saved to `{edited_metadata}`.", "Success", style=wx.ICON_INFORMATION
+                f"Edits saved to `{edited_metadata}`.",
+                "Success",
+                style=wx.ICON_INFORMATION,
             )
 
     def onExportCSV(self, event):
         self.save()
-        has_pending_review = any(filter(operator.attrgetter("pending_review"), self._objects))
+        has_pending_review = any(
+            filter(operator.attrgetter("pending_review"), self._objects)
+        )
         if has_pending_review:
             retval = wx.MessageBox(
                 "Some items are marked as pending review. Would you like to export them without further changes?",
                 "Pending review",
-                style=wx.YES_NO|wx.ICON_WARNING
+                style=wx.YES_NO | wx.ICON_WARNING,
             )
             if retval == wx.NO:
                 return
@@ -313,14 +317,14 @@ class MainWindow(SimpleDialog):
             for obj in self._objects
             if not obj.deleted
         )
-        csv_filename = self._dataset_dir.joinpath(EDITED_METADATA_FILENAME).with_suffix(".csv")
+        csv_filename = self._dataset_dir.joinpath(EDITED_METADATA_FILENAME).with_suffix(
+            ".csv"
+        )
         with open(csv_filename, "w", encoding="utf-8", newline="\n") as file:
             writer = csv.writer(file, delimiter="|")
             writer.writerows(rows)
         wx.MessageBox(
-            f"Data exported to `{csv_filename}`",
-            "Success",
-            style=wx.ICON_INFORMATION
+            f"Data exported to `{csv_filename}`", "Success", style=wx.ICON_INFORMATION
         )
 
     def onCloseDataset(self, event):
@@ -352,7 +356,7 @@ class MainWindow(SimpleDialog):
             return
         self.transcriptTextCtrl.SetValue(utterance.transcript)
         if utterance.pending_review or utterance.deleted:
-                self.play_file(ALERT_SOUND)
+            self.play_file(ALERT_SOUND)
 
     def onTextChanged(self, event):
         utterance = self.wavList.get_selected()
@@ -443,15 +447,15 @@ class MainWindow(SimpleDialog):
                     self.searchBtn.SetValue(False)
                     wx.MessageBox("Invalid regex", "Error", style=wx.ICON_ERROR)
                     return
-                objs = list(filter(
-                    lambda o: reg.match(o.transcript),
-                    self.wavList._objects
-                ))
+                objs = list(
+                    filter(lambda o: reg.match(o.transcript), self.wavList._objects)
+                )
             else:
-                objs = list(filter(
-                    lambda o: search_string in o.transcript,
-                    self.wavList._objects
-                ))
+                objs = list(
+                    filter(
+                        lambda o: search_string in o.transcript, self.wavList._objects
+                    )
+                )
             if objs:
                 self.wavList.set_objects(objs)
             else:
@@ -466,10 +470,7 @@ class MainWindow(SimpleDialog):
         if self.deletedBtn.GetValue():
             self.deletedBtn.SetValue(False)
         if self.pendingReviewBtn.GetValue():
-            filtered_objs = filter(
-                operator.attrgetter("pending_review"),
-                self._objects
-            )
+            filtered_objs = filter(operator.attrgetter("pending_review"), self._objects)
             objs = list(filtered_objs)
         else:
             objs = self._objects
@@ -481,31 +482,26 @@ class MainWindow(SimpleDialog):
         if self.pendingReviewBtn.GetValue():
             self.pendingReviewBtn.SetValue(False)
         if self.deletedBtn.GetValue():
-            filtered_objs = filter(
-                operator.attrgetter("deleted"),
-                self._objects
-            )
+            filtered_objs = filter(operator.attrgetter("deleted"), self._objects)
             objs = list(filtered_objs)
         else:
             objs = self._objects
         self.wavList.set_objects(objs, set_focus=True)
 
     def onHelp(self, event):
-        hotkeys = "\n".join([
-            "Ctrl + O: open dataset directory",
-            "Ctrl + W: close currently opened dataset",
-            "Ctrl + S: save edits",
-            "Ctrl + D: mark as deleted",
-            "Ctrl + R: mark as pending review",
-            "Alt + right arrow: next utterance",
-            "Alt + left arrow: previous utterance",
-            "Enter: play current utterance's audio",
-        ])
-        wx.MessageBox(
-            hotkeys,
-            "Hotkeys",
-            style=wx.ICON_INFORMATION
+        hotkeys = "\n".join(
+            [
+                "Ctrl + O: open dataset directory",
+                "Ctrl + W: close currently opened dataset",
+                "Ctrl + S: save edits",
+                "Ctrl + D: mark as deleted",
+                "Ctrl + R: mark as pending review",
+                "Alt + right arrow: next utterance",
+                "Alt + left arrow: previous utterance",
+                "Enter: play current utterance's audio",
+            ]
         )
+        wx.MessageBox(hotkeys, "Hotkeys", style=wx.ICON_INFORMATION)
 
     def play_file(self, filename):
         self._playback_device.stop()
@@ -529,14 +525,11 @@ class MainWindow(SimpleDialog):
             retval = wx.MessageBox(
                 f"You have existing edits in the file `{edited_metadata}`.\nSaving will overwrite those edits.\nAre you sure you want to proceed?",
                 "Possible data loss",
-                style=wx.YES_NO|wx.ICON_ERROR
+                style=wx.YES_NO | wx.ICON_ERROR,
             )
             if retval == wx.NO:
                 return False
-        entries = [
-            obj.asdict()
-            for obj in self._objects
-        ]
+        entries = [obj.asdict() for obj in self._objects]
         entries.sort(key=operator.itemgetter("idx"))
         with open(edited_metadata, "w", encoding="utf-8") as json_file:
             json.dump(entries, json_file, ensure_ascii=False, indent=2)

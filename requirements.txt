@@ -1,2 +1,5 @@
 miniaudio==1.59
+Nuitka==1.7.10
+regex==2023.8.8
+thefuzz==0.20.0
 wxPython==4.2.1
