@@ -1,16 +1,17 @@
 # coding: utf-8
 
-import audioop
 import csv
 import json
 import operator
 import os
+import statistics
 import sys
 import wave
 from dataclasses import dataclass
 from pathlib import Path
 
-import miniaudio
+from audioplayer import AudioPlayer
+import pylibtashkeel
 import regex
 import wx
 import wx.lib.sized_controls as sc
@@ -24,6 +25,12 @@ SAVE_SOUND = os.fspath(Path.cwd().joinpath("sounds", "save.wav"))
 ALERT_SOUND = os.fspath(Path.cwd().joinpath("sounds", "alert.wav"))
 NAV_SOUND = os.fspath(Path.cwd().joinpath("sounds", "nav.wav"))
 
+
+class DummyPlayer:
+    def start(self): ...
+    def stop(self): ...
+    def pause(self): ...
+    def close(self): ...
 
 @dataclass
 class WavAndTranscript:
@@ -59,7 +66,7 @@ class WavAndTranscript:
 
     @property
     def duration(self):
-        return "-"
+        return self.get_duration()
 
     def get_duration(self):
         with wave.open(os.fspath(self.wavpath)) as wavfile:
@@ -94,7 +101,8 @@ class MainWindow(SimpleDialog):
         self._objects = None
         self._dataset_dir = None
         self._is_source_csv = False
-        self._playback_device = miniaudio.PlaybackDevice()
+        self._player = DummyPlayer()
+        self.__paused = False
 
     def addControls(self, parent):
         parent.SetSizerType("vertical")
@@ -118,6 +126,7 @@ class MainWindow(SimpleDialog):
             parent, -1, style=wx.TE_PROCESS_ENTER | wx.TE_RICH2
         )
         self.transcriptTextCtrl.SetSizerProps(expand=True)
+        self.tashkeelBtn = wx.Button(parent, wx.ID_ANY, "&Tashkeel")
         optionsBox = make_sized_static_box(parent, "Options")
         wx.StaticText(optionsBox, -1, "&Volume")
         volumeSlider = wx.Slider(optionsBox, -1, self._volume, 0, 100)
@@ -125,7 +134,7 @@ class MainWindow(SimpleDialog):
             optionsBox, -1, "Auto play audio when navigating"
         )
         autoplayCheckbox.SetValue(self._autoplay_audio)
-        rtlCheckbox = wx.CheckBox(optionsBox, -1, "Right to left")
+        self.rtlCheckbox = wx.CheckBox(optionsBox, -1, "Right to left")
         buttonPanel = sc.SizedPanel(parent, -1)
         buttonPanel.SetSizerType("horizontal")
         self.openBtn = wx.Button(buttonPanel, wx.ID_OPEN, "&Open dataset directory")
@@ -140,6 +149,7 @@ class MainWindow(SimpleDialog):
         self.Bind(wx.EVT_BUTTON, self.onOpen, self.openBtn)
         self.Bind(wx.EVT_BUTTON, self.onSave, self.saveBtn)
         self.Bind(wx.EVT_BUTTON, self.onExportCSV, self.exportCSVBtn)
+        self.Bind(wx.EVT_BUTTON, self.onTashkeel, self.tashkeelBtn)
         self.Bind(wx.EVT_BUTTON, self.onCloseDataset, self.closeDatasetBtn)
         self.Bind(wx.EVT_LIST_ITEM_FOCUSED, self.onWavSelected, self.wavList)
         self.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.onPlayPauseWav, self.wavList)
@@ -151,10 +161,15 @@ class MainWindow(SimpleDialog):
             lambda e: self.transcriptTextCtrl.SetInsertionPoint(0),
             self.transcriptTextCtrl,
         )
-        rtlCheckbox.Bind(
+        self.transcriptTextCtrl.Bind(
+            wx.EVT_KEY_UP,
+            self.onTranscriptTextCtrlKeyUp,
+            self.transcriptTextCtrl,
+        )
+        self.rtlCheckbox.Bind(
             wx.EVT_CHECKBOX,
             lambda e: self.set_text_direction(e.IsChecked()),
-            rtlCheckbox,
+            self.rtlCheckbox,
         )
         autoplayCheckbox.Bind(
             wx.EVT_CHECKBOX,
@@ -208,7 +223,7 @@ class MainWindow(SimpleDialog):
         self.transcriptTextCtrl.SetValue(self.transcriptTextCtrl.GetValue())
 
     def onDClose(self, event):
-        self._playback_device.stop()
+        self._player.stop()
         if self.has_unsaved_edits():
             retval = wx.MessageBox(
                 "You have some unsaved edits.\nWould you like to save them before exiting?",
@@ -217,7 +232,7 @@ class MainWindow(SimpleDialog):
             )
             if retval == wx.YES:
                 self.save(True)
-        self._playback_device.close()
+        self._player.close()
         sys.exit(0)
 
     def onOpen(self, event):
@@ -253,7 +268,7 @@ class MainWindow(SimpleDialog):
             self._is_source_csv = False
             with open(metadata_file, "r", encoding="utf-8") as json_file:
                 for entry in json.load(json_file):
-                    wavewpath = chosen_path.joinpath("wavs", entry["filename"] + ".wav")
+                    wavewpath = chosen_path.joinpath("wav", entry["filename"] + ".wav")
                     obj = WavAndTranscript(
                         idx=entry["idx"],
                         wavpath=wavewpath,
@@ -268,7 +283,7 @@ class MainWindow(SimpleDialog):
                 for (idx, row) in enumerate(csv.reader(csv_file, delimiter="|")):
                     if not row:
                         continue
-                    wavewpath = chosen_path.joinpath("wavs", f"{row[0]}.wav")
+                    wavewpath = chosen_path.joinpath("wav", f"{row[0]}.wav")
                     objs.append(WavAndTranscript(idx, wavewpath, row[-1]))
 
         objs.sort(key=operator.attrgetter("idx"))
@@ -288,8 +303,10 @@ class MainWindow(SimpleDialog):
         self.deletedBtn.Enable(True)
         self.saveBtn.Enable(True)
         self.exportCSVBtn.Enable(not self._is_source_csv)
+        self.tashkeelBtn.Enable(True)
         self.closeDatasetBtn.Enable(True)
         self.set_title()
+        self.show_summary(objs)
 
     def onSave(self, event):
         if self.save():
@@ -328,7 +345,7 @@ class MainWindow(SimpleDialog):
         )
 
     def onCloseDataset(self, event):
-        self._playback_device.stop()
+        self._player.stop()
         if self.has_unsaved_edits():
             retval = wx.MessageBox(
                 "You have some unsaved edits.\nWould you like to save them?",
@@ -344,6 +361,7 @@ class MainWindow(SimpleDialog):
         self.deletedBtn.Enable(False)
         self.saveBtn.Enable(False)
         self.exportCSVBtn.Enable(False)
+        self.tashkeelBtn.Enable(False)
         self.closeDatasetBtn.Enable(False)
         self._objects = None
         self._dataset_dir = None
@@ -368,6 +386,17 @@ class MainWindow(SimpleDialog):
 
     def has_unsaved_edits(self):
         return self.GetTitle().startswith("*")
+
+    def onTashkeel(self, event):
+        utterance = self.wavList.get_selected()
+        if utterance is None:
+            return
+        text_value = self.transcriptTextCtrl.GetValue()
+        text_value = pylibtashkeel.tashkeel(text_value)
+        self.transcriptTextCtrl.SetValue(text_value)
+        self.transcriptTextCtrl.SetInsertionPoint(0)
+        self.set_text_direction(self.rtlCheckbox.IsChecked())
+        self.transcriptTextCtrl.SetFocus()
 
     def onPlayPauseWav(self, event):
         utterance = self.wavList.get_selected()
@@ -503,18 +532,22 @@ class MainWindow(SimpleDialog):
         )
         wx.MessageBox(hotkeys, "Hotkeys", style=wx.ICON_INFORMATION)
 
+    def onTranscriptTextCtrlKeyUp(self, event):
+        if event.KeyCode == wx.WXK_CONTROL:
+            if self.__paused == True:
+                self.__paused = False
+                self._player.resume()
+            elif self.__paused == False:
+                self._player.pause()
+                self.__paused = True
+        else:
+            event.Skip()
+
     def play_file(self, filename):
-        self._playback_device.stop()
-        file_stream = miniaudio.stream_file(filename)
-        stream_with_volume = miniaudio.stream_with_callbacks(
-            file_stream,
-            frame_process_method=lambda audio: audioop.mul(
-                audio, 2, self._volume / 100.0
-            ),
-        )
-        # workaround of miniaudio issue
-        next(stream_with_volume)
-        self._playback_device.start(stream_with_volume)
+        self._player.stop()
+        self._player = AudioPlayer(filename)
+        self._player.volume = self._volume
+        self._player.play()
 
     def save(self, play_sound=False):
         if not self.has_unsaved_edits():
@@ -549,6 +582,24 @@ class MainWindow(SimpleDialog):
         if dirty:
             title = "* " + title
         self.SetTitle(title)
+
+    def show_summary(self, objs):
+        durations = [o.duration for o in objs]
+        d_max = max(durations)
+        d_min = min(durations)
+        d_mean = statistics.mean(durations)
+        d_total = sum(durations)
+        summary = "\n".join([
+            f"Min duration: {d_min}",
+            f"Max duration: {d_max}",
+            f"Mean duration: {d_mean}",
+            f"Total duration: {d_total}",
+        ])
+        wx.MessageBox(
+            summary,
+            "Dataset summary"
+        )
+        
 
 
 if __name__ == "__main__":
